@@ -1,0 +1,835 @@
+"use client"
+
+import { Header } from "@/components/header"
+import { Card } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { Shield, Users, MessageSquare, BookOpen, Calendar, BarChart3, Settings, AlertTriangle, Trash2, Ban, CheckCircle } from "lucide-react"
+import Link from "next/link"
+import { useState, useEffect } from "react"
+import { onAuthStateChange, getUserProfile, UserProfile } from "@/lib/firebase-auth"
+import { useRouter } from "next/navigation"
+import { getAllUsers, blockUser, deleteUserAccount, getUserPostsCount } from "@/lib/firestore-admin"
+import { getPosts, deletePost, Post } from "@/lib/firestore-posts"
+import { getNotifications, markAllNotificationsAsRead, Notification } from "@/lib/firestore-notifications"
+
+export default function AdminPage() {
+  const [isAdmin, setIsAdmin] = useState(false)
+  const [isLoading, setIsLoading] = useState(true)
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'users' | 'posts'>('dashboard')
+  const [users, setUsers] = useState<UserProfile[]>([])
+  const [posts, setPosts] = useState<Post[]>([])
+  const [userPostCounts, setUserPostCounts] = useState<Record<string, number>>({})
+  const [notifications, setNotifications] = useState<Notification[]>([])
+  const [stats, setStats] = useState({
+    totalUsers: 0,
+    totalPosts: 0,
+    unreadNotifications: 0
+  })
+  const router = useRouter()
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChange(async (user) => {
+      if (!user) {
+        // 로그인하지 않은 경우 홈으로 리다이렉트
+        router.push('/')
+        return
+      }
+
+      // 사용자 프로필에서 역할 확인
+      const profile = await getUserProfile(user.uid)
+      if (profile?.role === 'admin') {
+        setIsAdmin(true)
+      } else {
+        // 관리자가 아닌 경우 홈으로 리다이렉트
+        router.push('/')
+      }
+      setIsLoading(false)
+    })
+
+    return () => unsubscribe()
+  }, [router])
+
+  // 사용자 목록 로드
+  const loadUsers = async () => {
+    try {
+      const fetchedUsers = await getAllUsers()
+      setUsers(fetchedUsers)
+      
+      // 각 사용자의 게시글 수 가져오기
+      const counts: Record<string, number> = {}
+      for (const user of fetchedUsers) {
+        counts[user.uid] = await getUserPostsCount(user.uid)
+      }
+      setUserPostCounts(counts)
+    } catch (error) {
+      console.error('Failed to load users:', error)
+    }
+  }
+
+  // 모든 게시글 로드
+  const loadAllPosts = async () => {
+    try {
+      const anonymousPosts = await getPosts('anonymous', undefined, true)
+      const freePosts = await getPosts('free', undefined, true)
+      setPosts([...anonymousPosts, ...freePosts])
+    } catch (error) {
+      console.error('Failed to load posts:', error)
+    }
+  }
+
+  // 알림 로드
+  const loadNotifications = async () => {
+    try {
+      const fetchedNotifications = await getNotifications(20)
+      setNotifications(fetchedNotifications)
+    } catch (error) {
+      console.error('Failed to load notifications:', error)
+    }
+  }
+
+  // 통계 업데이트
+  const updateStats = async () => {
+    try {
+      const allUsers = await getAllUsers()
+      const anonymousPosts = await getPosts('anonymous', undefined, true)
+      const freePosts = await getPosts('free', undefined, true)
+      const unreadCount = notifications.filter(n => !n.read).length
+      
+      setStats({
+        totalUsers: allUsers.length,
+        totalPosts: anonymousPosts.length + freePosts.length,
+        unreadNotifications: unreadCount
+      })
+    } catch (error) {
+      console.error('Failed to update stats:', error)
+    }
+  }
+
+  useEffect(() => {
+    if (isAdmin) {
+      if (activeTab === 'users') {
+        loadUsers()
+      } else if (activeTab === 'posts') {
+        loadAllPosts()
+      } else if (activeTab === 'dashboard') {
+        loadNotifications()
+      }
+      updateStats()
+    }
+  }, [isAdmin, activeTab])
+
+  // Block/unblock user
+  const handleBlockUser = async (uid: string, currentlyBlocked: boolean) => {
+    if (!confirm(`Are you sure you want to ${currentlyBlocked ? 'unblock' : 'block'} this user?`)) return
+
+    try {
+      await blockUser(uid, !currentlyBlocked)
+      alert(`User has been ${currentlyBlocked ? 'unblocked' : 'blocked'} successfully.`)
+      loadUsers()
+    } catch (error) {
+      console.error('Failed to block/unblock user:', error)
+      alert('Operation failed. Please try again.')
+    }
+  }
+
+  // Delete user account
+  const handleDeleteUser = async (uid: string, email: string) => {
+    if (!confirm(`Are you sure you want to delete "${email}"?\n\n⚠️ This action cannot be undone. All of this user's posts will also be permanently deleted.`)) return
+
+    try {
+      await deleteUserAccount(uid)
+      alert('User account deleted successfully.')
+      loadUsers()
+    } catch (error) {
+      console.error('Failed to delete user:', error)
+      alert('Failed to delete account. Please try again.')
+    }
+  }
+
+  // Delete post
+  const handleDeletePost = async (postId: string) => {
+    if (!confirm('Are you sure you want to delete this post?')) return
+
+    try {
+      await deletePost(postId)
+      alert('Post deleted successfully.')
+      loadAllPosts()
+    } catch (error) {
+      console.error('Failed to delete post:', error)
+      alert('Failed to delete post. Please try again.')
+    }
+  }
+
+  // 시간 포맷
+  const formatDate = (timestamp: any) => {
+    if (!timestamp) return '-'
+    try {
+      const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp)
+      return date.toLocaleDateString('ko-KR', { year: 'numeric', month: 'short', day: 'numeric' })
+    } catch {
+      return '-'
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto"></div>
+          <p className="mt-4 text-muted-foreground">Loading...</p>
+        </div>
+      </div>
+    )
+  }
+
+  if (!isAdmin) {
+    return null // 리다이렉트 중
+  }
+
+  return (
+    <div className="min-h-screen bg-background">
+      <Header />
+
+      <main className="container mx-auto px-6 py-8 max-w-7xl">
+        {/* 헤더 */}
+        <div className="mb-8">
+          <div className="flex items-center gap-3 mb-2">
+            <div className="w-12 h-12 rounded-full bg-amber-100 flex items-center justify-center">
+              <Shield className="h-6 w-6 text-amber-600" />
+            </div>
+            <div>
+              <h1 className="text-3xl font-bold text-foreground">Admin Dashboard</h1>
+              <p className="text-muted-foreground">UnMute Platform Management</p>
+            </div>
+          </div>
+        </div>
+
+        {/* 탭 메뉴 */}
+        <div className="flex gap-2 mb-6">
+          <Button
+            variant={activeTab === 'dashboard' ? 'default' : 'outline'}
+            onClick={() => setActiveTab('dashboard')}
+          >
+            Dashboard
+          </Button>
+          <Button
+            variant={activeTab === 'users' ? 'default' : 'outline'}
+            onClick={() => setActiveTab('users')}
+          >
+            <Users className="h-4 w-4 mr-2" />
+            User Management
+          </Button>
+          <Button
+            variant={activeTab === 'posts' ? 'default' : 'outline'}
+            onClick={() => setActiveTab('posts')}
+          >
+            <MessageSquare className="h-4 w-4 mr-2" />
+            Post Management
+          </Button>
+        </div>
+
+        {/* Dashboard 탭 */}
+        {activeTab === 'dashboard' && (
+          <div>
+            {/* 통계 카드 */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+          <Card className="p-6 hover:shadow-lg transition-shadow">
+            <div className="flex items-center justify-between mb-4">
+              <div className="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center">
+                <Users className="h-6 w-6 text-blue-600" />
+              </div>
+              <span className="text-2xl font-bold text-blue-600">{stats.totalUsers}</span>
+            </div>
+            <h3 className="font-semibold text-foreground">Total Users</h3>
+            <p className="text-sm text-muted-foreground">Registered users</p>
+          </Card>
+
+          <Card className="p-6 hover:shadow-lg transition-shadow">
+            <div className="flex items-center justify-between mb-4">
+              <div className="w-12 h-12 rounded-full bg-purple-100 flex items-center justify-center">
+                <MessageSquare className="h-6 w-6 text-purple-600" />
+              </div>
+              <span className="text-2xl font-bold text-purple-600">{stats.totalPosts}</span>
+            </div>
+            <h3 className="font-semibold text-foreground">Posts</h3>
+            <p className="text-sm text-muted-foreground">Anonymous + Free Board</p>
+          </Card>
+
+          <Card className="p-6 hover:shadow-lg transition-shadow">
+            <div className="flex items-center justify-between mb-4">
+              <div className="w-12 h-12 rounded-full bg-green-100 flex items-center justify-center">
+                <BookOpen className="h-6 w-6 text-green-600" />
+              </div>
+              <span className="text-2xl font-bold text-green-600">0</span>
+            </div>
+            <h3 className="font-semibold text-foreground">Tutoring Requests</h3>
+            <p className="text-sm text-muted-foreground">Pending tutoring sessions</p>
+          </Card>
+
+          <Card className="p-6 hover:shadow-lg transition-shadow">
+            <div className="flex items-center justify-between mb-4">
+              <div className="w-12 h-12 rounded-full bg-orange-100 flex items-center justify-center">
+                <Calendar className="h-6 w-6 text-orange-600" />
+              </div>
+              <span className="text-2xl font-bold text-orange-600">0</span>
+            </div>
+            <h3 className="font-semibold text-foreground">Counseling Sessions</h3>
+            <p className="text-sm text-muted-foreground">Scheduled appointments</p>
+          </Card>
+        </div>
+
+        {/* 관리 메뉴 */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {/* 사용자 관리 */}
+          <Card 
+            className="p-6 hover:shadow-lg transition-shadow cursor-pointer group"
+            onClick={() => setActiveTab('users')}
+          >
+            <div className="flex items-start gap-4">
+              <div className="w-14 h-14 rounded-lg bg-blue-100 flex items-center justify-center group-hover:bg-blue-200 transition-colors">
+                <Users className="h-7 w-7 text-blue-600" />
+              </div>
+              <div className="flex-1">
+                <h3 className="font-semibold text-lg mb-2 group-hover:text-primary transition-colors">
+                  User Management
+                </h3>
+                <p className="text-sm text-muted-foreground mb-4">
+                  View users, manage permissions, block/unblock accounts
+                </p>
+                <Button variant="outline" size="sm" className="w-full">
+                  Manage
+                </Button>
+              </div>
+            </div>
+          </Card>
+
+          {/* 게시글 관리 */}
+          <Card 
+            className="p-6 hover:shadow-lg transition-shadow cursor-pointer group"
+            onClick={() => setActiveTab('posts')}
+          >
+            <div className="flex items-start gap-4">
+              <div className="w-14 h-14 rounded-lg bg-purple-100 flex items-center justify-center group-hover:bg-purple-200 transition-colors">
+                <MessageSquare className="h-7 w-7 text-purple-600" />
+              </div>
+              <div className="flex-1">
+                <h3 className="font-semibold text-lg mb-2 group-hover:text-primary transition-colors">
+                  Post Management
+                </h3>
+                <p className="text-sm text-muted-foreground mb-4">
+                  Review and moderate posts from all boards
+                </p>
+                <Button variant="outline" size="sm" className="w-full">
+                  Manage
+                </Button>
+              </div>
+            </div>
+          </Card>
+
+          {/* 튜토링 관리 */}
+          <Card className="p-6 hover:shadow-lg transition-shadow cursor-pointer group opacity-60">
+            <div className="flex items-start gap-4">
+              <div className="w-14 h-14 rounded-lg bg-green-100 flex items-center justify-center group-hover:bg-green-200 transition-colors">
+                <BookOpen className="h-7 w-7 text-green-600" />
+              </div>
+              <div className="flex-1">
+                <h3 className="font-semibold text-lg mb-2 group-hover:text-primary transition-colors">
+                  Tutoring Management
+                </h3>
+                <p className="text-sm text-muted-foreground mb-4">
+                  Review tutoring requests and schedule sessions
+                </p>
+                <Button variant="outline" size="sm" className="w-full" disabled>
+                  Coming Soon
+                </Button>
+              </div>
+            </div>
+          </Card>
+
+          {/* 상담 관리 */}
+          <Card className="p-6 hover:shadow-lg transition-shadow cursor-pointer group opacity-60">
+            <div className="flex items-start gap-4">
+              <div className="w-14 h-14 rounded-lg bg-orange-100 flex items-center justify-center group-hover:bg-orange-200 transition-colors">
+                <Calendar className="h-7 w-7 text-orange-600" />
+              </div>
+              <div className="flex-1">
+                <h3 className="font-semibold text-lg mb-2 group-hover:text-primary transition-colors">
+                  Counseling Management
+                </h3>
+                <p className="text-sm text-muted-foreground mb-4">
+                  Manage counseling appointments and schedules
+                </p>
+                <Button variant="outline" size="sm" className="w-full" disabled>
+                  Coming Soon
+                </Button>
+              </div>
+            </div>
+          </Card>
+
+          {/* 통계 */}
+          <Card className="p-6 hover:shadow-lg transition-shadow cursor-pointer group opacity-60">
+            <div className="flex items-start gap-4">
+              <div className="w-14 h-14 rounded-lg bg-indigo-100 flex items-center justify-center group-hover:bg-indigo-200 transition-colors">
+                <BarChart3 className="h-7 w-7 text-indigo-600" />
+              </div>
+              <div className="flex-1">
+                <h3 className="font-semibold text-lg mb-2 group-hover:text-primary transition-colors">
+                  Statistics & Analytics
+                </h3>
+                <p className="text-sm text-muted-foreground mb-4">
+                  View platform usage stats and activity reports
+                </p>
+                <Button variant="outline" size="sm" className="w-full" disabled>
+                  Coming Soon
+                </Button>
+              </div>
+            </div>
+          </Card>
+
+          {/* 설정 */}
+          <Card className="p-6 hover:shadow-lg transition-shadow cursor-pointer group opacity-60">
+            <div className="flex items-start gap-4">
+              <div className="w-14 h-14 rounded-lg bg-gray-100 flex items-center justify-center group-hover:bg-gray-200 transition-colors">
+                <Settings className="h-7 w-7 text-gray-600" />
+              </div>
+              <div className="flex-1">
+                <h3 className="font-semibold text-lg mb-2 group-hover:text-primary transition-colors">
+                  System Settings
+                </h3>
+                <p className="text-sm text-muted-foreground mb-4">
+                  Configure platform settings and security options
+                </p>
+                <Button variant="outline" size="sm" className="w-full" disabled>
+                  Coming Soon
+                </Button>
+              </div>
+            </div>
+          </Card>
+        </div>
+
+        {/* 최근 알림 */}
+        <Card className="mt-8 p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-3">
+              <AlertTriangle className="h-6 w-6 text-amber-600" />
+              <h2 className="text-xl font-semibold">Recent Notifications</h2>
+              {stats.unreadNotifications > 0 && (
+                <Badge className="bg-red-500 text-white">
+                  {stats.unreadNotifications} new
+                </Badge>
+              )}
+            </div>
+            {notifications.length > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={async () => {
+                  await markAllNotificationsAsRead()
+                  loadNotifications()
+                  updateStats()
+                }}
+              >
+                Mark All as Read
+              </Button>
+            )}
+          </div>
+          <div className="space-y-3">
+            {notifications.length === 0 ? (
+              <p className="text-muted-foreground text-center py-8">
+                No notifications yet.
+              </p>
+            ) : (
+              notifications.map((notification) => (
+                <div
+                  key={notification.id}
+                  className={`p-4 rounded-lg border-2 ${
+                    notification.read ? 'bg-gray-50 opacity-60' : 'bg-white border-primary/30'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <Badge className={
+                          notification.type === 'new_post' ? 'bg-purple-100 text-purple-700' :
+                          notification.type === 'new_user' ? 'bg-blue-100 text-blue-700' :
+                          'bg-gray-100 text-gray-700'
+                        }>
+                          {notification.type === 'new_post' ? '📝 New Post' :
+                           notification.type === 'new_user' ? '👤 New User' : 'ℹ️ System'}
+                        </Badge>
+                        {!notification.read && (
+                          <Badge variant="destructive" className="text-xs">New</Badge>
+                        )}
+                      </div>
+                      <h4 className="font-semibold text-foreground mb-1">{notification.title}</h4>
+                      <p className="text-sm text-muted-foreground">{notification.message}</p>
+                      <p className="text-xs text-muted-foreground mt-2">
+                        {notification.createdAt?.toDate ? 
+                          notification.createdAt.toDate().toLocaleString() : 
+                          'Just now'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </Card>
+
+        {/* 사용자 관리 */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-8">
+          <Card className="p-6 hover:shadow-lg transition-shadow cursor-pointer group">
+            <div className="flex items-start gap-4">
+              <div className="w-14 h-14 rounded-lg bg-blue-100 flex items-center justify-center group-hover:bg-blue-200 transition-colors">
+                <Users className="h-7 w-7 text-blue-600" />
+              </div>
+              <div className="flex-1">
+                <h3 className="font-semibold text-lg mb-2 group-hover:text-primary transition-colors">
+                  사용자 관리
+                </h3>
+                <p className="text-sm text-muted-foreground mb-4">
+                  사용자 목록 조회, 권한 관리, 계정 상태 관리
+                </p>
+                <Button variant="outline" size="sm" className="w-full">
+                  관리하기
+                </Button>
+              </div>
+            </div>
+          </Card>
+
+          {/* 게시글 관리 */}
+          <Card className="p-6 hover:shadow-lg transition-shadow cursor-pointer group">
+            <div className="flex items-start gap-4">
+              <div className="w-14 h-14 rounded-lg bg-purple-100 flex items-center justify-center group-hover:bg-purple-200 transition-colors">
+                <MessageSquare className="h-7 w-7 text-purple-600" />
+              </div>
+              <div className="flex-1">
+                <h3 className="font-semibold text-lg mb-2 group-hover:text-primary transition-colors">
+                  게시글 관리
+                </h3>
+                <p className="text-sm text-muted-foreground mb-4">
+                  익명게시판, 자유게시판 게시글 관리 및 검토
+                </p>
+                <Button variant="outline" size="sm" className="w-full">
+                  관리하기
+                </Button>
+              </div>
+            </div>
+          </Card>
+
+          {/* 튜토링 관리 */}
+          <Card className="p-6 hover:shadow-lg transition-shadow cursor-pointer group">
+            <div className="flex items-start gap-4">
+              <div className="w-14 h-14 rounded-lg bg-green-100 flex items-center justify-center group-hover:bg-green-200 transition-colors">
+                <BookOpen className="h-7 w-7 text-green-600" />
+              </div>
+              <div className="flex-1">
+                <h3 className="font-semibold text-lg mb-2 group-hover:text-primary transition-colors">
+                  튜토링 관리
+                </h3>
+                <p className="text-sm text-muted-foreground mb-4">
+                  튜토링 신청 확인, 일정 관리, 응답 작성
+                </p>
+                <Button variant="outline" size="sm" className="w-full">
+                  관리하기
+                </Button>
+              </div>
+            </div>
+          </Card>
+
+          {/* 상담 관리 */}
+          <Card className="p-6 hover:shadow-lg transition-shadow cursor-pointer group">
+            <div className="flex items-start gap-4">
+              <div className="w-14 h-14 rounded-lg bg-orange-100 flex items-center justify-center group-hover:bg-orange-200 transition-colors">
+                <Calendar className="h-7 w-7 text-orange-600" />
+              </div>
+              <div className="flex-1">
+                <h3 className="font-semibold text-lg mb-2 group-hover:text-primary transition-colors">
+                  상담 예약 관리
+                </h3>
+                <p className="text-sm text-muted-foreground mb-4">
+                  상담 예약 확인, 일정 조정, 상태 관리
+                </p>
+                <Button variant="outline" size="sm" className="w-full">
+                  관리하기
+                </Button>
+              </div>
+            </div>
+          </Card>
+
+          {/* 통계 */}
+          <Card className="p-6 hover:shadow-lg transition-shadow cursor-pointer group">
+            <div className="flex items-start gap-4">
+              <div className="w-14 h-14 rounded-lg bg-indigo-100 flex items-center justify-center group-hover:bg-indigo-200 transition-colors">
+                <BarChart3 className="h-7 w-7 text-indigo-600" />
+              </div>
+              <div className="flex-1">
+                <h3 className="font-semibold text-lg mb-2 group-hover:text-primary transition-colors">
+                  통계 및 분석
+                </h3>
+                <p className="text-sm text-muted-foreground mb-4">
+                  플랫폼 사용 통계, 활동 분석, 리포트
+                </p>
+                <Button variant="outline" size="sm" className="w-full">
+                  보기
+                </Button>
+              </div>
+            </div>
+          </Card>
+
+          {/* 설정 */}
+          <Card className="p-6 hover:shadow-lg transition-shadow cursor-pointer group">
+            <div className="flex items-start gap-4">
+              <div className="w-14 h-14 rounded-lg bg-gray-100 flex items-center justify-center group-hover:bg-gray-200 transition-colors">
+                <Settings className="h-7 w-7 text-gray-600" />
+              </div>
+              <div className="flex-1">
+                <h3 className="font-semibold text-lg mb-2 group-hover:text-primary transition-colors">
+                  시스템 설정
+                </h3>
+                <p className="text-sm text-muted-foreground mb-4">
+                  플랫폼 설정, 권한 관리, 보안 설정
+                </p>
+                <Button variant="outline" size="sm" className="w-full">
+                  설정하기
+                </Button>
+              </div>
+            </div>
+          </Card>
+        </div>
+
+        {/* 최근 알림 - Dashboard Tab 내부 */}
+        <Card className="mt-8 p-6">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-3">
+              <AlertTriangle className="h-6 w-6 text-amber-600" />
+              <h2 className="text-xl font-semibold">Recent Notifications</h2>
+              {stats.unreadNotifications > 0 && (
+                <Badge className="bg-red-500 text-white">
+                  {stats.unreadNotifications} new
+                </Badge>
+              )}
+            </div>
+            {notifications.length > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={async () => {
+                  await markAllNotificationsAsRead()
+                  loadNotifications()
+                  updateStats()
+                }}
+              >
+                Mark All as Read
+              </Button>
+            )}
+          </div>
+          <div className="space-y-3">
+            {notifications.length === 0 ? (
+              <p className="text-muted-foreground text-center py-8">
+                No notifications yet.
+              </p>
+            ) : (
+              notifications.map((notification) => (
+                <div
+                  key={notification.id}
+                  className={`p-4 rounded-lg border-2 ${
+                    notification.read ? 'bg-gray-50 opacity-60' : 'bg-white border-primary/30'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <Badge className={
+                          notification.type === 'new_post' ? 'bg-purple-100 text-purple-700' :
+                          notification.type === 'new_user' ? 'bg-blue-100 text-blue-700' :
+                          'bg-gray-100 text-gray-700'
+                        }>
+                          {notification.type === 'new_post' ? '📝 New Post' :
+                           notification.type === 'new_user' ? '👤 New User' : 'ℹ️ System'}
+                        </Badge>
+                        {!notification.read && (
+                          <Badge variant="destructive" className="text-xs">New</Badge>
+                        )}
+                      </div>
+                      <h4 className="font-semibold text-foreground mb-1">{notification.title}</h4>
+                      <p className="text-sm text-muted-foreground">{notification.message}</p>
+                      <p className="text-xs text-muted-foreground mt-2">
+                        {notification.createdAt?.toDate ? 
+                          notification.createdAt.toDate().toLocaleString() : 
+                          'Just now'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </Card>
+
+        {/* 빠른 액션 */}
+        <div className="mt-8 flex gap-4">
+          <Link href="/" className="flex-1">
+            <Button variant="outline" className="w-full">
+              Back to Home
+            </Button>
+          </Link>
+        </div>
+        </div>
+        )}
+
+        {/* 사용자 관리 탭 */}
+        {activeTab === 'users' && (
+          <div>
+            <Card className="p-6">
+              <h2 className="text-2xl font-bold mb-6">User Management</h2>
+              <div className="space-y-4">
+                {users.length === 0 ? (
+                  <p className="text-center text-muted-foreground py-8">No users found.</p>
+                ) : (
+                  users.map((user) => (
+                    <Card key={user.uid} className="p-4 border-2">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-3 mb-2">
+                            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary/30 to-primary/50 flex items-center justify-center text-white font-bold">
+                              {user.displayName?.charAt(0) || 'U'}
+                            </div>
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <h3 className="font-semibold text-lg">{user.displayName || 'Anonymous'}</h3>
+                                {user.role === 'admin' && (
+                                  <Badge className="bg-amber-100 text-amber-700">Admin</Badge>
+                                )}
+                                {user.blocked && (
+                                  <Badge variant="destructive">Blocked</Badge>
+                                )}
+                              </div>
+                              <p className="text-sm text-muted-foreground">{user.email}</p>
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-3 text-sm">
+                            <div>
+                              <span className="text-muted-foreground">Nickname:</span>
+                              <p className="font-medium">{user.nickname || '-'}</p>
+                            </div>
+                            <div>
+                              <span className="text-muted-foreground">Grade:</span>
+                              <p className="font-medium">{user.grade || '-'}</p>
+                            </div>
+                            <div>
+                              <span className="text-muted-foreground">Posts:</span>
+                              <p className="font-medium">{userPostCounts[user.uid] || 0}</p>
+                            </div>
+                            <div>
+                              <span className="text-muted-foreground">Joined:</span>
+                              <p className="font-medium">{formatDate(user.createdAt)}</p>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex flex-col gap-2">
+                          {user.role !== 'admin' && (
+                            <>
+                              <Button
+                                variant={user.blocked ? "default" : "outline"}
+                                size="sm"
+                                className={`gap-2 ${user.blocked ? '' : 'hover:bg-amber-50 hover:text-amber-700'}`}
+                                onClick={() => handleBlockUser(user.uid, user.blocked || false)}
+                              >
+                                {user.blocked ? (
+                                  <>
+                                    <CheckCircle className="h-4 w-4" />
+                                    Unblock
+                                  </>
+                                ) : (
+                                  <>
+                                    <Ban className="h-4 w-4" />
+                                    Block
+                                  </>
+                                )}
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="gap-2 hover:bg-destructive/10 hover:text-destructive"
+                                onClick={() => handleDeleteUser(user.uid, user.email)}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                                Delete
+                              </Button>
+                            </>
+                          )}
+                          {user.role === 'admin' && (
+                            <Badge className="bg-amber-100 text-amber-700 justify-center">
+                              Protected
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+                    </Card>
+                  ))
+                )}
+              </div>
+            </Card>
+          </div>
+        )}
+
+        {/* 게시글 관리 탭 */}
+        {activeTab === 'posts' && (
+          <div>
+            <Card className="p-6">
+              <h2 className="text-2xl font-bold mb-6">Post Management</h2>
+              <div className="space-y-4">
+                {posts.length === 0 ? (
+                  <p className="text-center text-muted-foreground py-8">No posts found.</p>
+                ) : (
+                  posts.map((post) => (
+                    <Card key={post.id} className="p-4 border-2">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-2 flex-wrap">
+                            <Badge className={post.boardType === 'anonymous' ? 'bg-primary/10 text-primary' : 'bg-[#D4A574]/15 text-[#D4A574]'}>
+                              {post.boardType === 'anonymous' ? 'Anonymous Board' : 'Free Board'}
+                            </Badge>
+                            <Badge variant="outline">{post.category}</Badge>
+                            {post.isPrivate && (
+                              <Badge variant="destructive">Private</Badge>
+                            )}
+                            <span className="text-xs text-muted-foreground ml-auto">
+                              {formatDate(post.createdAt)}
+                            </span>
+                          </div>
+                          <h3 className="font-bold text-lg mb-2">{post.title}</h3>
+                          <p className="text-sm text-muted-foreground line-clamp-2 mb-3">
+                            {post.content}
+                          </p>
+                          <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                            <span>Author: {post.isAnonymous ? 'Anonymous' : post.authorName}</span>
+                            <span>Views: {post.viewCount}</span>
+                            <span>Comments: {post.commentCount}</span>
+                          </div>
+                        </div>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="gap-2 hover:bg-destructive/10 hover:text-destructive"
+                          onClick={() => handleDeletePost(post.id)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                          Delete
+                        </Button>
+                      </div>
+                    </Card>
+                  ))
+                )}
+              </div>
+            </Card>
+          </div>
+        )}
+      </main>
+    </div>
+  )
+}
+
+
