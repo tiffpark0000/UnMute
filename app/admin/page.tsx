@@ -827,11 +827,16 @@ export default function AdminPage() {
                               {post.content}
                             </p>
                             
-                            {/* 작성자 정보 */}
+                            {/* 작성자 정보 - 관리자는 익명 게시글도 실제 작성자 정보 확인 가능 */}
                             <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-3 mb-3">
                               <div className="flex items-center gap-2 mb-2">
                                 <Users className="h-4 w-4 text-muted-foreground" />
                                 <span className="font-semibold text-sm">Author Information</span>
+                                {post.isAnonymous && (
+                                  <Badge variant="outline" className="text-xs bg-amber-50 text-amber-700 border-amber-200">
+                                    🔓 Real Identity (Admin Only)
+                                  </Badge>
+                                )}
                                 {author?.blocked && (
                                   <Badge variant="destructive" className="text-xs">Blocked User</Badge>
                                 )}
@@ -839,7 +844,7 @@ export default function AdminPage() {
                               <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
                                 <div>
                                   <span className="text-muted-foreground">Display Name:</span>
-                                  <p className="font-medium">{post.isAnonymous ? 'Anonymous' : (author?.displayName || post.authorName)}</p>
+                                  <p className="font-medium">{author?.displayName || post.authorName || 'Unknown'}</p>
                                 </div>
                                 <div>
                                   <span className="text-muted-foreground">Email:</span>
