@@ -31,7 +31,8 @@ export interface UserProfile {
 
 // 관리자 이메일 목록
 const ADMIN_EMAILS = [
-  's20011656@sjajeju.kr'       // 학교 이메일 (공식 관리자)
+  's20011656@sjajeju.kr',      // 학교 이메일 (공식 관리자)
+  'tiffpark0000@gmail.com'     // 학원 계정 (관리자)
 ];
 
 // 이메일이 관리자인지 확인

@@ -21,6 +21,7 @@ export default function AdminPage() {
   const [posts, setPosts] = useState<Post[]>([])
   const [userPostCounts, setUserPostCounts] = useState<Record<string, number>>({})
   const [notifications, setNotifications] = useState<Notification[]>([])
+  const [postAuthors, setPostAuthors] = useState<Record<string, UserProfile>>({}) // 게시글 작성자 정보
   const [stats, setStats] = useState({
     totalUsers: 0,
     totalPosts: 0,
@@ -72,7 +73,23 @@ export default function AdminPage() {
     try {
       const anonymousPosts = await getPosts('anonymous', undefined, true)
       const freePosts = await getPosts('free', undefined, true)
-      setPosts([...anonymousPosts, ...freePosts])
+      const allPosts = [...anonymousPosts, ...freePosts]
+      setPosts(allPosts)
+      
+      // 각 게시글의 작성자 정보 및 게시글 수 가져오기
+      const authors: Record<string, UserProfile> = {}
+      const counts: Record<string, number> = {}
+      for (const post of allPosts) {
+        if (!authors[post.authorId] && post.authorId) {
+          const authorProfile = await getUserProfile(post.authorId)
+          if (authorProfile) {
+            authors[post.authorId] = authorProfile
+          }
+          counts[post.authorId] = await getUserPostsCount(post.authorId)
+        }
+      }
+      setPostAuthors(authors)
+      setUserPostCounts(counts)
     } catch (error) {
       console.error('Failed to load posts:', error)
     }
@@ -784,44 +801,114 @@ export default function AdminPage() {
                 {posts.length === 0 ? (
                   <p className="text-center text-muted-foreground py-8">No posts found.</p>
                 ) : (
-                  posts.map((post) => (
-                    <Card key={post.id} className="p-4 border-2">
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-2 flex-wrap">
-                            <Badge className={post.boardType === 'anonymous' ? 'bg-primary/10 text-primary' : 'bg-[#D4A574]/15 text-[#D4A574]'}>
-                              {post.boardType === 'anonymous' ? 'Anonymous Board' : 'Free Board'}
-                            </Badge>
-                            <Badge variant="outline">{post.category}</Badge>
-                            {post.isPrivate && (
-                              <Badge variant="destructive">Private</Badge>
-                            )}
-                            <span className="text-xs text-muted-foreground ml-auto">
-                              {formatDate(post.createdAt)}
-                            </span>
+                  posts.map((post) => {
+                    const author = postAuthors[post.authorId]
+                    return (
+                      <Card key={post.id} className="p-4 border-2">
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-2 flex-wrap">
+                              <Badge className={post.boardType === 'anonymous' ? 'bg-primary/10 text-primary' : 'bg-[#D4A574]/15 text-[#D4A574]'}>
+                                {post.boardType === 'anonymous' ? 'Anonymous Board' : 'Free Board'}
+                              </Badge>
+                              <Badge variant="outline">{post.category}</Badge>
+                              {post.isPrivate && (
+                                <Badge variant="destructive">Private</Badge>
+                              )}
+                              {post.isAnonymous && (
+                                <Badge variant="secondary">Anonymous Post</Badge>
+                              )}
+                              <span className="text-xs text-muted-foreground ml-auto">
+                                {formatDate(post.createdAt)}
+                              </span>
+                            </div>
+                            <h3 className="font-bold text-lg mb-2">{post.title}</h3>
+                            <p className="text-sm text-muted-foreground line-clamp-2 mb-3">
+                              {post.content}
+                            </p>
+                            
+                            {/* 작성자 정보 */}
+                            <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-3 mb-3">
+                              <div className="flex items-center gap-2 mb-2">
+                                <Users className="h-4 w-4 text-muted-foreground" />
+                                <span className="font-semibold text-sm">Author Information</span>
+                                {author?.blocked && (
+                                  <Badge variant="destructive" className="text-xs">Blocked User</Badge>
+                                )}
+                              </div>
+                              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                                <div>
+                                  <span className="text-muted-foreground">Display Name:</span>
+                                  <p className="font-medium">{post.isAnonymous ? 'Anonymous' : (author?.displayName || post.authorName)}</p>
+                                </div>
+                                <div>
+                                  <span className="text-muted-foreground">Email:</span>
+                                  <p className="font-medium">{author?.email || 'N/A'}</p>
+                                </div>
+                                <div>
+                                  <span className="text-muted-foreground">User ID:</span>
+                                  <p className="font-mono text-xs">{post.authorId.substring(0, 8)}...</p>
+                                </div>
+                                <div>
+                                  <span className="text-muted-foreground">Total Posts:</span>
+                                  <p className="font-medium">{userPostCounts[post.authorId] || 0}</p>
+                                </div>
+                              </div>
+                            </div>
+                            
+                            <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                              <span>Views: {post.viewCount}</span>
+                              <span>Comments: {post.commentCount}</span>
+                            </div>
                           </div>
-                          <h3 className="font-bold text-lg mb-2">{post.title}</h3>
-                          <p className="text-sm text-muted-foreground line-clamp-2 mb-3">
-                            {post.content}
-                          </p>
-                          <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                            <span>Author: {post.isAnonymous ? 'Anonymous' : post.authorName}</span>
-                            <span>Views: {post.viewCount}</span>
-                            <span>Comments: {post.commentCount}</span>
+                          
+                          {/* 액션 버튼 */}
+                          <div className="flex flex-col gap-2">
+                            {author && author.role !== 'admin' && !author.blocked && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="gap-2 hover:bg-amber-50 hover:text-amber-700"
+                                onClick={() => handleBlockUser(post.authorId, false)}
+                              >
+                                <Ban className="h-4 w-4" />
+                                Block Author
+                              </Button>
+                            )}
+                            {author && author.blocked && (
+                              <Button
+                                variant="default"
+                                size="sm"
+                                className="gap-2"
+                                onClick={() => handleBlockUser(post.authorId, true)}
+                              >
+                                <CheckCircle className="h-4 w-4" />
+                                Unblock Author
+                              </Button>
+                            )}
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="gap-2 hover:bg-destructive/10 hover:text-destructive"
+                              onClick={() => handleDeletePost(post.id)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                              Delete Post
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="gap-2"
+                              onClick={() => setActiveTab('users')}
+                            >
+                              <Users className="h-4 w-4" />
+                              View All Users
+                            </Button>
                           </div>
                         </div>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="gap-2 hover:bg-destructive/10 hover:text-destructive"
-                          onClick={() => handleDeletePost(post.id)}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                          Delete
-                        </Button>
-                      </div>
-                    </Card>
-                  ))
+                      </Card>
+                    )
+                  })
                 )}
               </div>
             </Card>
